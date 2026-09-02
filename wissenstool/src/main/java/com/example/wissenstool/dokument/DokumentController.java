@@ -1,4 +1,5 @@
 package com.example.wissenstool.dokument;
+import org.apache.catalina.Service;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,7 +29,12 @@ public class DokumentController {
 
     @PostMapping("/{id}")
     public String postMethodName(@RequestBody DokumentDto dto) {
-        return service.sa
+        return dokumentService.saveDokument(dto.titel(), dto.content());
+    }
+
+    @DeleteMapping("/{id}")
+    public void deleteDokument(@PathVariable Long id) {
+        dokumentService.deleteDokument(id);
     }
     
     
