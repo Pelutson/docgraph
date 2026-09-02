@@ -8,6 +8,7 @@ public class WissenstoolApplication {
 
 	public static void main(String[] args) {
 		SpringApplication.run(WissenstoolApplication.class, args);
+		System.out.println("Hello World");
 	}
 
 }
