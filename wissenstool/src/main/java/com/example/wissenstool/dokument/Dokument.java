@@ -1,6 +1,11 @@
 package com.example.wissenstool.dokument;
-import jakarta.persistence.*;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Lob;
 
+@Entity
 public class Dokument {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -12,6 +17,9 @@ public class Dokument {
     @Lob
 
     private String content;
+
+    protected Dokument() {
+    }
 
     protected Dokument(String titel, String content) {
         this.content = content;
