@@ -1,0 +1,30 @@
+# Läuft bei jedem Push und Pull Request. Ergebnis: Tab "Actions" auf GitHub.
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install -e ".[dev]"
+      # Nur fertige Schritte prüfen -> bleibt grün, solange nichts kaputtgeht.
+      # Nach jedem fertigen Schritt ergänzen, z. B.: "schritt1 or upload_txt or schritt2"
+      # Wenn alle Schritte fertig sind: -k komplett weglassen.
+      - run: python -m pytest -k "schritt1 or upload_txt"
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install ruff
+      # E9 = Syntaxfehler, F = echte Fehler (ungenutzte Imports, unbekannte Namen, ...)
+      # Aktuell 2 Meldungen aus dem TODO-Gerüst -> verschwinden mit Schritt 5 und 7.
+      - run: ruff check --select E9,F .
