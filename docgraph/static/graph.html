@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>docgraph · Graph</title>
+<link rel="stylesheet" href="app.css">
+<style>
+  #canvas-wrap { padding: 0; position: relative; overflow: hidden; min-height: 60vh; }
+  svg { width: 100%; height: 100%; display: block; touch-action: none; }
+  .edge { stroke: var(--edge); stroke-width: 2; }
+  .node circle { stroke: var(--panel); stroke-width: 3; cursor: grab; }
+  .node.private circle { fill: var(--private); }
+  .node.public circle { fill: var(--public); }
+  .node.selected circle { stroke: var(--accent); stroke-width: 5; }
+  .node.source circle { stroke: var(--warn); stroke-width: 5; }
+  .node text { fill: var(--text); font-size: 12px; pointer-events: none; text-anchor: middle; }
+  #overlay { position: absolute; top: 12px; left: 12px; right: 12px; }
+</style>
+</head>
+<body>
+
+<main style="grid-template-columns: 1fr 320px">
+  <section class="panel" id="canvas-wrap">
+    <svg id="svg"><g id="edges"></g><g id="nodes"></g></svg>
+    <div id="overlay"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Graph</h2>
+    <div class="meta">Knoten ziehen zum Anordnen · Klick zeigt Details.</div>
+    <div class="row">
+      <button id="connect">Verbinden-Modus</button>
+      <button id="relayout" title="Neu anordnen">↻</button>
+    </div>
+    <div id="connect-help" class="hint hidden">
+      Klick auf das <b>erste</b> Dokument, dann auf das <b>zweite</b> → Verknüpfung wird angelegt (Schritt 6).
+      <input id="link-label" placeholder="Label (optional), z. B. baut auf" style="margin-top:6px">
+    </div>
+
+    <div id="info" class="section">
+      <p class="empty">Kein Knoten ausgewählt.</p>
+    </div>
+
+    <div class="section meta">
+      <span class="badge private">private</span> nur lokale KI ·
+      <span class="badge public">public</span> darf in die Cloud
+    </div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+<script>
+// ---------- Daten -----------------------------------------------------------
+// Knoten = Dokumente, Kanten = Links. Es gibt (noch) keinen Endpunkt, der alle
+// Links auf einmal liefert, darum fragen wir pro Dokument /neighbors ab.
+
+let nodes = [];   // {id, title, sensitivity, x, y, vx, vy}
+let edges = [];   // {a, b}  (ungerichtet, a < b)
+let selected = null, source = null, connectMode = false;
+
+async function loadGraph() {
+  const docs = await api("/api/documents").catch((e) => { showError(e); return []; });
+  const old = new Map(nodes.map((n) => [n.id, n]));
+  const w = svg.clientWidth, h = svg.clientHeight;
+  nodes = docs.map((d, i) => {
+    const prev = old.get(d.id);
+    const angle = (i / Math.max(docs.length, 1)) * Math.PI * 2;
+    return { ...d, x: prev?.x ?? w / 2 + Math.cos(angle) * 150, y: prev?.y ?? h / 2 + Math.sin(angle) * 150, vx: 0, vy: 0 };
+  });
+
+  edges = [];
+  let missing = false;
+  const seen = new Set();
+  await Promise.all(nodes.map(async (n) => {
+    try {
+      for (const nb of await api(`/api/documents/${n.id}/neighbors`)) {
+        const a = Math.min(n.id, nb.id), b = Math.max(n.id, nb.id);
+        if (!seen.has(a + "-" + b)) { seen.add(a + "-" + b); edges.push({ a, b }); }
+      }
+    } catch (e) { if (e.status === 501) missing = true; }
+  }));
+
+  $("#overlay").innerHTML = !nodes.length
+    ? '<div class="hint">Noch keine Dokumente. Leg auf der Seite <a href="index.html">Dokumente</a> welche an.</div>'
+    : missing ? '<div class="hint">Verbindungen erscheinen, sobald <b>Schritt 6</b> (link + neighbors) gebaut ist.</div>' : "";
+
+  draw();
+  heat = 1;
+}
+
+// ---------- Zeichnen (SVG) --------------------------------------------------
+
+const svg = $("#svg");
+const NS = "http://www.w3.org/2000/svg";
+const byId = (id) => nodes.find((n) => n.id === id);
+
+function draw() {
+  $("#edges").innerHTML = edges.map((e) => `<line class="edge" data-a="${e.a}" data-b="${e.b}"/>`).join("");
+  $("#nodes").innerHTML = nodes.map((n) => `
+    <g class="node ${n.sensitivity}" data-id="${n.id}">
+      <circle r="${12 + Math.min(degree(n.id), 6) * 2}"/>
+      <text dy="${30 + Math.min(degree(n.id), 6) * 2}">${esc(n.title.length > 24 ? n.title.slice(0, 22) + "…" : n.title)}</text>
+    </g>`).join("");
+  updateClasses();
+  render();
+}
+
+const degree = (id) => edges.filter((e) => e.a === id || e.b === id).length;
+
+function render() {
+  for (const el of $("#edges").children) {
+    const a = byId(Number(el.dataset.a)), b = byId(Number(el.dataset.b));
+    el.setAttribute("x1", a.x); el.setAttribute("y1", a.y);
+    el.setAttribute("x2", b.x); el.setAttribute("y2", b.y);
+  }
+  for (const el of $("#nodes").children) {
+    const n = byId(Number(el.dataset.id));
+    el.setAttribute("transform", `translate(${n.x},${n.y})`);
+  }
+}
+
+function updateClasses() {
+  for (const el of $("#nodes").children) {
+    const id = Number(el.dataset.id);
+    el.classList.toggle("selected", id === selected);
+    el.classList.toggle("source", id === source);
+  }
+}
+
+// ---------- Kräfte-Layout ("force-directed") --------------------------------
+// Knoten stoßen sich ab (wie Ladungen), Kanten ziehen zusammen (wie Federn),
+// alles wird leicht zur Mitte gezogen. "heat" kühlt ab, bis alles ruhig ist.
+
+let heat = 1, dragging = null;
+
+function tick() {
+  if (heat > 0.01) {
+    const w = svg.clientWidth, h = svg.clientHeight;
+    for (const a of nodes) {
+      for (const b of nodes) {
+        if (a === b) continue;
+        const dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy + 0.01;
+        const f = 2500 / d2;
+        a.vx += dx * f / Math.sqrt(d2); a.vy += dy * f / Math.sqrt(d2);
+      }
+      a.vx += (w / 2 - a.x) * 0.005; a.vy += (h / 2 - a.y) * 0.005;
+    }
+    for (const e of edges) {
+      const a = byId(e.a), b = byId(e.b);
+      const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const f = (d - 120) * 0.02;
+      a.vx += dx / d * f; a.vy += dy / d * f;
+      b.vx -= dx / d * f; b.vy -= dy / d * f;
+    }
+    for (const n of nodes) {
+      if (n === dragging) { n.vx = n.vy = 0; continue; }
+      n.x += n.vx * heat; n.y += n.vy * heat;
+      n.vx *= 0.6; n.vy *= 0.6;
+      n.x = Math.max(30, Math.min(w - 30, n.x));
+      n.y = Math.max(30, Math.min(h - 40, n.y));
+    }
+    heat *= 0.985;
+    render();
+  }
+  requestAnimationFrame(tick);
+}
+
+// ---------- Maus: ziehen + klicken -----------------------------------------
+
+let downAt = null;
+svg.addEventListener("pointerdown", (ev) => {
+  const g = ev.target.closest(".node");
+  if (!g) return;
+  dragging = byId(Number(g.dataset.id));
+  downAt = { x: ev.clientX, y: ev.clientY };
+  svg.setPointerCapture(ev.pointerId);
+});
+svg.addEventListener("pointermove", (ev) => {
+  if (!dragging) return;
+  const r = svg.getBoundingClientRect();
+  dragging.x = ev.clientX - r.left; dragging.y = ev.clientY - r.top;
+  heat = Math.max(heat, 0.3);
+  render();
+});
+svg.addEventListener("pointerup", (ev) => {
+  if (!dragging) return;
+  const moved = Math.hypot(ev.clientX - downAt.x, ev.clientY - downAt.y) > 4;
+  const n = dragging;
+  dragging = null;
+  if (!moved) onNodeClick(n);
+});
+
+async function onNodeClick(n) {
+  if (!connectMode) { selected = n.id; updateClasses(); showInfo(n); return; }
+  if (source === null) { source = n.id; updateClasses(); return; }
+  if (source === n.id) { source = null; updateClasses(); return; }
+  try {
+    await api(`/api/documents/${source}/links`, { method: "POST", ...json({ target_id: n.id, label: $("#link-label").value || null }) });
+    toast("Verknüpft");
+    source = null;
+    await loadGraph();
+  } catch (e) { showError(e); source = null; updateClasses(); }
+}
+
+function showInfo(n) {
+  const nbs = edges.filter((e) => e.a === n.id || e.b === n.id).map((e) => byId(e.a === n.id ? e.b : e.a));
+  $("#info").innerHTML = `
+    <div class="row" style="justify-content:space-between">
+      <b>${esc(n.title)}</b><span class="badge ${n.sensitivity}">${n.sensitivity}</span>
+    </div>
+    <div class="box" style="max-height:200px;margin:8px 0">${esc((n.content || "(leer)").slice(0, 400))}</div>
+    <h3>Verbunden mit</h3>
+    <ul style="margin:0;padding-left:18px">${nbs.map((m) => `<li>${esc(m.title)}</li>`).join("") || '<li class="empty">nichts</li>'}</ul>
+    <p><a href="index.html#${n.id}">Dokument öffnen →</a></p>`;
+}
+
+// ---------- Buttons ---------------------------------------------------------
+
+$("#connect").addEventListener("click", () => {
+  connectMode = !connectMode;
+  source = null;
+  $("#connect").classList.toggle("on", connectMode);
+  $("#connect-help").classList.toggle("hidden", !connectMode);
+  updateClasses();
+});
+
+$("#relayout").addEventListener("click", () => {
+  const w = svg.clientWidth, h = svg.clientHeight;
+  nodes.forEach((n) => { n.x = w / 2 + (Math.random() - .5) * 300; n.y = h / 2 + (Math.random() - .5) * 300; });
+  heat = 1;
+});
+
+loadGraph().then(() => {
+  const id = Number(location.hash.slice(1));
+  const n = id && byId(id);
+  if (n) { selected = id; updateClasses(); showInfo(n); }
+});
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>docgraph · KI</title>
+<link rel="stylesheet" href="app.css">
+<style>
+  .pick li { cursor: default; }
+  .pick label { display: flex; gap: 8px; align-items: center; flex: 1; cursor: pointer; }
+  .pick li.used { outline: 2px solid var(--ok); }
+  .pick li.withheld { outline: 2px dashed var(--danger); opacity: .6; }
+  .mode { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .mode label { border: 1px solid var(--border); border-radius: 8px; padding: 10px; cursor: pointer; }
+  .mode label:has(input:checked) { border-color: var(--accent); background: var(--bg); }
+  .mode small { display: block; color: var(--muted); }
+  .history-item { border-top: 1px solid var(--border); padding-top: 10px; }
+</style>
+</head>
+<body>
+
+<main style="grid-template-columns: 340px 1fr">
+  <!-- Links: Kontext auswählen -->
+  <section class="panel">
+    <h2>Kontext-Dokumente</h2>
+    <div class="row">
+      <button id="all">Alle</button>
+      <button id="none">Keine</button>
+      <button id="only-public">Nur public</button>
+    </div>
+    <ul id="pick" class="list pick"></ul>
+    <div class="meta">
+      Nach einer Antwort: <span style="color:var(--ok)">grün</span> = an die KI gegangen,
+      <span style="color:var(--danger)">gestrichelt</span> = vom Gateway zurückgehalten.
+    </div>
+  </section>
+
+  <!-- Rechts: Frage + Antwort -->
+  <section class="panel">
+    <h2>KI fragen</h2>
+    <div class="hint">
+      Schritt 7/8: Das <b>AiGateway</b> muss dafür sorgen, dass die Cloud-KI nie ein <b>private</b>-Dokument sieht.
+      Hier kannst du es live ausprobieren.
+    </div>
+    <form id="ai-form" class="stack">
+      <div class="mode">
+        <label><input type="radio" name="provider" value="local" checked> Lokale KI
+          <small>Ollama auf deinem PC · sieht alles</small></label>
+        <label><input type="radio" name="provider" value="cloud"> Cloud-KI
+          <small>Internet · sieht nur <b>public</b></small></label>
+      </div>
+      <textarea name="question" placeholder="Deine Frage…" required></textarea>
+      <button class="primary">Fragen</button>
+    </form>
+    <div id="history"></div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+<script>
+let docs = [];
+
+async function loadDocs() {
+  try {
+    docs = await api("/api/documents");
+    $("#pick").innerHTML = docs.length
+      ? docs.map((d) => `
+        <li data-id="${d.id}">
+          <label><input type="checkbox" value="${d.id}"> ${esc(d.title)}</label>
+          <span class="badge ${d.sensitivity}">${d.sensitivity}</span>
+        </li>`).join("")
+      : '<li class="empty">Keine Dokumente – leg erst welche an.</li>';
+  } catch (e) { showError(e); }
+}
+
+const boxes = () => [...document.querySelectorAll("#pick input[type=checkbox]")];
+$("#all").onclick = () => boxes().forEach((b) => (b.checked = true));
+$("#none").onclick = () => boxes().forEach((b) => (b.checked = false));
+$("#only-public").onclick = () => boxes().forEach((b) => {
+  b.checked = docs.find((d) => d.id === Number(b.value))?.sensitivity === "public";
+});
+
+// Nach der Antwort markieren, welche Docs benutzt bzw. zurückgehalten wurden
+function markUsage(sentIds, usedIds) {
+  document.querySelectorAll("#pick li[data-id]").forEach((li) => {
+    const id = Number(li.dataset.id);
+    li.classList.toggle("used", usedIds.includes(id));
+    li.classList.toggle("withheld", sentIds.includes(id) && !usedIds.includes(id));
+  });
+}
+
+$("#ai-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = new FormData(ev.target);
+  const ids = boxes().filter((b) => b.checked).map((b) => Number(b.value));
+  const body = { question: f.get("question"), document_ids: ids, use_cloud: f.get("provider") === "cloud" };
+  try {
+    const a = await api("/api/ai/ask", { method: "POST", ...json(body) });
+    markUsage(ids, a.used_document_ids);
+    $("#history").insertAdjacentHTML("afterbegin", `
+      <div class="history-item">
+        <div><b>${esc(body.question)}</b></div>
+        <div class="meta">Provider: ${esc(a.provider)} · benutzt: ${a.used_document_ids.length} · zurückgehalten: ${a.withheld_count}</div>
+        <div class="box" style="margin-top:6px">${esc(a.answer)}</div>
+      </div>`);
+  } catch (e) { showError(e); }
+});
+
+loadDocs();
+</script>
+</body>
+</html>

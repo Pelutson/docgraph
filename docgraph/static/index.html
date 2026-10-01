@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>docgraph · Dokumente</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<main style="grid-template-columns: 320px 1fr">
+  <!-- Links: Suche, Liste, Neu, Upload -->
+  <section class="panel">
+    <h2>Dokumente</h2>
+    <div class="row">
+      <input id="search" placeholder="Suchen… (Schritt 4)">
+      <button id="search-clear" title="Suche zurücksetzen">✕</button>
+    </div>
+    <ul id="doc-list" class="list"></ul>
+
+    <details class="section">
+      <summary>+ Neues Dokument</summary>
+      <form id="new-form" class="stack" style="margin-top:8px">
+        <input name="title" placeholder="Titel" required>
+        <textarea name="content" placeholder="Inhalt"></textarea>
+        <select name="sensitivity">
+          <option value="private">private (nur lokale KI)</option>
+          <option value="public">public (darf in die Cloud)</option>
+        </select>
+        <button class="primary">Anlegen</button>
+      </form>
+    </details>
+
+    <details class="section">
+      <summary>⇪ Datei hochladen (.txt, .md, .pdf)</summary>
+      <form id="upload-form" class="stack" style="margin-top:8px">
+        <input type="file" name="file" accept=".txt,.md,.pdf" required>
+        <select name="sensitivity">
+          <option value="private">private</option>
+          <option value="public">public</option>
+        </select>
+        <button class="primary">Hochladen</button>
+      </form>
+    </details>
+  </section>
+
+  <!-- Rechts: Detailansicht -->
+  <section class="panel">
+    <p class="empty" id="detail-empty">Links ein Dokument auswählen.</p>
+    <div id="detail-body" class="hidden" style="display:flex;flex-direction:column;gap:12px">
+      <div class="row" style="justify-content:space-between">
+        <h2 id="d-title" style="font-size:20px;text-transform:none;letter-spacing:0;color:var(--text)"></h2>
+        <span id="d-badge" class="badge"></span>
+      </div>
+      <div class="meta" id="d-meta"></div>
+      <div class="box" id="d-content" style="max-height:40vh"></div>
+      <div class="row">
+        <button class="danger" id="d-delete">Löschen (Schritt 2)</button>
+        <a id="d-graph" href="graph.html">Im Graph zeigen →</a>
+      </div>
+
+      <div class="section">
+        <h3>Kategorie hinzufügen (Schritt 5)</h3>
+        <form id="cat-form" class="row">
+          <input name="name" placeholder="z. B. uni" required>
+          <button>Hinzufügen</button>
+        </form>
+      </div>
+
+      <div class="section">
+        <h3>Verknüpfen (Schritt 6)</h3>
+        <form id="link-form" class="row">
+          <select name="target_id" id="link-target"></select>
+          <input name="label" placeholder="Label, z. B. baut auf">
+          <button>Verknüpfen</button>
+        </form>
+      </div>
+
+      <div class="section">
+        <h3>Verbundene Dokumente (Schritt 6)</h3>
+        <ul id="neighbors" style="margin:0;padding-left:18px"></ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+<script>
+let docs = [];        // alle Dokumente (aus GET /api/documents)
+let currentId = null; // ausgewähltes Dokument
+
+// ---------- Liste -----------------------------------------------------------
+
+function renderList(list) {
+  const ul = $("#doc-list");
+  if (!list.length) { ul.innerHTML = '<li class="empty">Keine Dokumente</li>'; return; }
+  ul.innerHTML = list.map((d) => `
+    <li data-id="${d.id}" class="${d.id === currentId ? "active" : ""}">
+      <span>${esc(d.title)}</span>
+      <span class="badge ${d.sensitivity}">${d.sensitivity}</span>
+    </li>`).join("");
+}
+
+async function loadDocs() {
+  try {
+    docs = await api("/api/documents");
+    renderList(docs);
+    renderLinkTargets();
+  } catch (e) { showError(e); }
+}
+
+$("#doc-list").addEventListener("click", (ev) => {
+  const li = ev.target.closest("li[data-id]");
+  if (li) openDoc(Number(li.dataset.id));
+});
+
+// ---------- Suche (Schritt 4) ----------------------------------------------
+
+let searchTimer;
+$("#search").addEventListener("input", (ev) => {
+  clearTimeout(searchTimer);
+  const q = ev.target.value.trim();
+  searchTimer = setTimeout(async () => {
+    if (!q) { renderList(docs); return; }
+    try { renderList(await api("/api/search?q=" + encodeURIComponent(q))); }
+    catch (e) { showError(e); }
+  }, 250);
+});
+$("#search-clear").addEventListener("click", () => { $("#search").value = ""; renderList(docs); });
+
+// ---------- Detail (Schritt 2) ---------------------------------------------
+
+async function openDoc(id) {
+  try {
+    const d = await api(`/api/documents/${id}`);
+    currentId = d.id;
+    location.hash = d.id; // damit der Graph per Link hierher springen kann
+    $("#detail-empty").classList.add("hidden");
+    $("#detail-body").classList.remove("hidden");
+    $("#d-title").textContent = d.title;
+    $("#d-badge").textContent = d.sensitivity;
+    $("#d-badge").className = "badge " + d.sensitivity;
+    $("#d-meta").textContent = `#${d.id} · ${new Date(d.created_at).toLocaleString("de-DE")}` + (d.source_filename ? ` · ${d.source_filename}` : "");
+    $("#d-content").textContent = d.content || "(leer)";
+    $("#d-graph").href = "graph.html#" + d.id;
+    renderList(docs);
+    renderLinkTargets();
+    loadNeighbors();
+  } catch (e) { showError(e); }
+}
+
+$("#d-delete").addEventListener("click", async () => {
+  if (!currentId || !confirm("Dokument wirklich löschen?")) return;
+  try {
+    await api(`/api/documents/${currentId}`, { method: "DELETE" });
+    toast("Gelöscht");
+    currentId = null;
+    history.replaceState(null, "", location.pathname);
+    $("#detail-body").classList.add("hidden");
+    $("#detail-empty").classList.remove("hidden");
+    loadDocs();
+  } catch (e) { showError(e); }
+});
+
+// ---------- Neu + Upload ----------------------------------------------------
+
+$("#new-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = new FormData(ev.target);
+  try {
+    const d = await api("/api/documents", { method: "POST", ...json(Object.fromEntries(f)) });
+    ev.target.reset();
+    toast("Angelegt");
+    await loadDocs();
+    openDoc(d.id);
+  } catch (e) { showError(e); }
+});
+
+$("#upload-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = new FormData(ev.target);
+  const sensitivity = f.get("sensitivity");
+  f.delete("sensitivity"); // geht als Query-Parameter, nicht im Body
+  try {
+    const d = await api("/api/documents/upload?sensitivity=" + sensitivity, { method: "POST", body: f });
+    ev.target.reset();
+    toast("Hochgeladen");
+    await loadDocs();
+    openDoc(d.id);
+  } catch (e) { showError(e); }
+});
+
+// ---------- Kategorien (Schritt 5) -----------------------------------------
+
+$("#cat-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const name = new FormData(ev.target).get("name").trim();
+  try {
+    await api(`/api/documents/${currentId}/categories/${encodeURIComponent(name)}`, { method: "POST" });
+    ev.target.reset();
+    toast(`Kategorie „${name}“ hinzugefügt`);
+  } catch (e) { showError(e); }
+});
+
+// ---------- Verknüpfen (Schritt 6) -----------------------------------------
+
+function renderLinkTargets() {
+  $("#link-target").innerHTML = docs
+    .filter((d) => d.id !== currentId)
+    .map((d) => `<option value="${d.id}">${esc(d.title)}</option>`).join("");
+}
+
+$("#link-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = new FormData(ev.target);
+  const body = { target_id: Number(f.get("target_id")), label: f.get("label") || null };
+  if (!body.target_id) { toast("Kein Ziel-Dokument", "error"); return; }
+  try {
+    await api(`/api/documents/${currentId}/links`, { method: "POST", ...json(body) });
+    ev.target.label.value = "";
+    toast("Verknüpft");
+    loadNeighbors();
+  } catch (e) { showError(e); }
+});
+
+async function loadNeighbors() {
+  const ul = $("#neighbors");
+  try {
+    const list = await api(`/api/documents/${currentId}/neighbors`);
+    ul.innerHTML = list.length
+      ? list.map((d) => `<li><a href="#" data-id="${d.id}">${esc(d.title)}</a></li>`).join("")
+      : '<li class="empty">keine</li>';
+  } catch (e) {
+    ul.innerHTML = `<li class="empty">${esc(e.message)}</li>`;
+  }
+}
+
+$("#neighbors").addEventListener("click", (ev) => {
+  const a = ev.target.closest("a[data-id]");
+  if (a) { ev.preventDefault(); openDoc(Number(a.dataset.id)); }
+});
+
+// ---------- Start -----------------------------------------------------------
+
+loadDocs().then(() => {
+  const id = Number(location.hash.slice(1));
+  if (id) openDoc(id);
+});
+</script>
+</body>
+</html>
