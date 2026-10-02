@@ -11,7 +11,7 @@ from docgraph.models import Document, Sensitivity
 @dataclass
 class AiRequest:
     question: str
-    context_docs: list[Document] = field(default_factory=list)
+    context_docs: list[Document] = field(default_factory=list) # Sein Wissen
 
 
 class AiProvider(ABC):
@@ -22,3 +22,16 @@ class AiProvider(ABC):
     @abstractmethod
     def ask(self, request: AiRequest) -> str:
         """Frage + (bereits gefilterte) Kontext-Dokumente -> Antworttext."""
+
+    def check_allowed(self,request: AiRequest) -> None: 
+       for d in request.context_docs:
+        if d.sensitivity not in self.allowed:
+            raise PermissionError(f"{self.name} darf nicht auf {d.sensitivity} zugreifen: {d.id}")
+
+def build_prompt(request: AiRequest) -> str:
+    text = ""
+    for d in request.context_docs:
+        text += "###" + d.title + "\n" + d.content + "\n"
+        
+    text += "###Frage: " + request.question + "\n"
+    return text

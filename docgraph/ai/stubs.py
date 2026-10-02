@@ -19,8 +19,9 @@ class CloudStubProvider(AiProvider):
     allowed = frozenset({Sensitivity.PUBLIC})
 
     def ask(self, request: AiRequest) -> str:
-        # TODO(Schritt 8): Zweite Sicherung ("defense in depth").
-        #   Auch wenn das Gateway filtert: Wenn hier trotzdem ein PRIVATE-Dokument
-        #   ankommt, sofort eine Exception werfen statt es zu verarbeiten.
+        self.check_allowed(request) #Hier wird geprüft, ob der Provider auf die Sensitivitätsstufen der Dokumente zugreifen darf.
         titles = [d.title for d in request.context_docs]
         return f"[cloud-stub] Frage: {request.question!r} | Kontext: {titles}"
+    
+       
+        

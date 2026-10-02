@@ -27,8 +27,6 @@ class AiGateway:
         for d in docs:
             if d.sensitivity in provider.allowed:
                 allowed_docs.append(d)
-
-
         withheld = len(docs) - len(allowed_docs)
 
         text = provider.ask(AiRequest(question, allowed_docs))
