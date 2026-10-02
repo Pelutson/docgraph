@@ -29,8 +29,9 @@ class DocumentService:
         raise NotImplementedError("Schritt 2: get")
 
     def get_many(self, doc_ids: list[int]) -> list[Document]:
-        # TODO(Schritt 2): mehrere auf einmal; Tipp -> select(...).where(Document.id.in_(...))
-        raise NotImplementedError("Schritt 2: get_many")
+        stmt = select(Document).where(Document.id.in_(doc_ids))
+        return  list(self.session.exec(stmt).all())
+   
 
     def delete(self, doc_id: int) -> bool:
         # TODO(Schritt 2): True wenn gelöscht, False wenn nicht gefunden.
