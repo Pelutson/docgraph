@@ -3,7 +3,7 @@ from fastapi import Depends
 from sqlmodel import Session
 
 from docgraph.ai.gateway import AiGateway
-#from docgraph.ai.stubs import CloudStubProvider, LocalStubProvider
+
 from docgraph.db import get_session
 from docgraph.services.documents import DocumentService
 from docgraph.ai.ollama import OllamaProvider
