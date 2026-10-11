@@ -1,7 +1,7 @@
 """Geschäftslogik für Dokumente (wie @Service in Spring).
 create() und list_all() sind fertig als Vorlage - den Rest baust du nach dem Muster.
 """
-from sqlmodel import Session, select
+from sqlmodel import Session, select,or_
 
 from docgraph.models import Category, Document, DocumentCreate, DocumentLink
 
@@ -22,11 +22,9 @@ class DocumentService:
     def list_all(self) -> list[Document]:
         return list(self.session.exec(select(Document)).all())
 
-    # --- Schritt 2 ----------------------------------------------------------
 
     def get(self, doc_id: int) -> Document | None:
-        # TODO(Schritt 2): Tipp -> self.session.get(Klasse, id)
-        raise NotImplementedError("Schritt 2: get")
+        return self.session.get(Document,doc_id)
 
     def get_many(self, doc_ids: list[int]) -> list[Document]:
         stmt = select(Document).where(Document.id.in_(doc_ids))
@@ -34,9 +32,22 @@ class DocumentService:
    
 
     def delete(self, doc_id: int) -> bool:
-        # TODO(Schritt 2): True wenn gelöscht, False wenn nicht gefunden.
-        #   Überleg dir: Was passiert mit DocumentLinks, die auf das Doc zeigen?
-        raise NotImplementedError("Schritt 2: delete")
+        
+        doc = self.get(doc_id)
+        if doc is None:
+            return False
+        
+        stmt = select(DocumentLink).where(or_(DocumentLink.source_id == doc_id, DocumentLink.target_id == doc_id)) #Baut eine SQL Bedingung
+        
+        links = self.session.exec(stmt).all()
+        
+        for link in links:
+            self.session.delete(link)
+            
+        self.session.delete(doc)
+        self.session.commit()
+        return True
+       
 
     # --- Schritt 5: Kategorien ----------------------------------------------
 
